@@ -1,8 +1,0 @@
-{
-  "name": "dsh-inapp-browser-desktop",
-  "version": "0.2.0",
-  "private": true,
-  "main": "main.cjs",
-  "scripts": {"start": "electron ."},
-  "devDependencies": {"electron": "44.4.2"}
-}

@@ -50,7 +50,7 @@ export function createHttpHandler(manager, activity = new Map(), hooks = {}) {
       if (method === 'activity') return json(res, 200, {items: [...activity].map(([sessionId, stamp]) => ({sessionId, stamp}))});
       if (method === 'closeSession') { await manager.close(args.sessionId); activity.delete(args.sessionId); return json(res, 200, {ok: true}); }
       const session = await manager.get(args.sessionId);
-      if (method === 'state') return json(res, 200, await session.state());
+      if (method === 'state') return json(res, 200, {...await session.state(), ...hooks.agentState?.(args.sessionId)});
       if (method === 'pause') {
         // Never wait behind page navigation/evaluation: stopping must remain responsive.
         const result = session.setPaused(args.paused === true);
@@ -58,7 +58,7 @@ export function createHttpHandler(manager, activity = new Map(), hooks = {}) {
           try { result.taskStopped = await hooks.stopTask?.(args.sessionId) || false; }
           catch (error) { result.stopError = error.message; result.taskStopped = false; }
         }
-        return json(res, 200, result);
+        return json(res, 200, {...result, ...hooks.agentState?.(args.sessionId)});
       }
       if (method === 'dialog') {
         // A modal may be blocking an in-flight page evaluation; resolving it must not queue behind that evaluation.
@@ -83,7 +83,7 @@ export function createHttpHandler(manager, activity = new Map(), hooks = {}) {
         const cleanup = () => { ended = true; clearInterval(heart); off?.(); streams.delete(res); };
         res.once('close', cleanup);
         try {
-          off = await session.subscribe(value => write({kind: 'frame', value}), value => write({kind: 'state', value}));
+          off = await session.subscribe(value => write({kind: 'frame', value}), value => write({kind: 'state', value: {...value, ...hooks.agentState?.(args.sessionId)}}));
           if (ended) off();
         } catch (error) { write({kind: 'state', value: {error: error.message}}); res.end(); }
         return;

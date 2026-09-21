@@ -126,7 +126,7 @@ export class BrowserSession extends EventEmitter {
     this.sharpTimer = setTimeout(() => {
       this.sharpTimer = null;
       void this.publishSharpFrame();
-    }, Math.max(0, 80 - (Date.now() - this.lastCapture)));
+    }, Math.max(0, 33 - (Date.now() - this.lastCapture)));
     this.sharpTimer.unref?.();
   }
   async publishSharpFrame() {

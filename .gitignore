@@ -1,6 +1,18 @@
-node_modules/
-tmp/
-outputs/
-.codex/
-*.tgz
-*.log
+# Publish only the runtime and essential repository metadata.
+/*
+!/.gitignore
+!/README.md
+!/LICENSE
+!/package.json
+!/cordis.patch.yml
+!/src/
+/src/*
+!/src/index.js
+!/src/browser.js
+!/src/cdp.js
+!/src/http.js
+!/src/native-cdp.js
+!/src/platform.js
+!/lib/
+/lib/*
+!/lib/client.js

@@ -14,8 +14,17 @@ export function apply(ctx) {
   const manager = new BrowserManager();
   const activity = new Map();
   const liveAgents = new Map();
-  const http = createHttpHandler(manager, activity, {stopTask: async id => {
-    const agent = ctx.get?.('agents')?.get(id) || liveAgents.get(id);
+  const getAgent = id => ctx.get?.('agents')?.get(id) || liveAgents.get(id);
+  ctx.on?.('agent/status', ({agent, status}) => {
+    liveAgents.set(agent.id, agent);
+    const session = manager.sessions.get(agent.id);
+    if (!session) return;
+    // A fresh user turn may use the browser again; aborted old work stays invalid.
+    if (status === 'running' && session.paused) session.setPaused(false);
+    session.emit('state', {aiRunning: status === 'running'});
+  });
+  const http = createHttpHandler(manager, activity, {agentState: id => ({aiRunning: getAgent(id)?.status === 'running'}), stopTask: async id => {
+    const agent = getAgent(id);
     if (typeof agent?.cancel !== 'function') return false;
     agent.cancel({kind: 'user'}, {keepInbox: false});
     return true;
