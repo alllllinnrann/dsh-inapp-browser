@@ -1,0 +1,14 @@
+import {mkdir, cp, copyFile, readFile, writeFile} from 'node:fs/promises';
+import {resolve, join} from 'node:path';
+const root = resolve(import.meta.dirname, '..');
+const runtime = process.argv[2];
+if (!runtime) throw new Error('Usage: node scripts/package-desktop.mjs <official extracted Electron runtime>');
+const output = join(root, 'outputs/dsh-inapp-browser-desktop-0.2.0-win-x64');
+await mkdir(output, {recursive:true});
+for (const file of ['package.json','main.cjs','preload.cjs','native-host.cjs','Start-Browser.cmd']) await copyFile(join(root,'desktop',file),join(output,file));
+await copyFile(join(root,'docs/V2-DESKTOP.md'),join(output,'README.md'));
+await copyFile(join(root,'LICENSE'),join(output,'LICENSE'));
+await cp(resolve(runtime),join(output,'runtime'),{recursive:true});
+const version = (await readFile(join(output,'runtime/version'),'utf8')).trim();
+await writeFile(join(output,'BUILD.json'),JSON.stringify({plugin:'0.2.0',electron:version,platform:'win32-x64',builtAt:new Date().toISOString()},null,2));
+console.log(output);
