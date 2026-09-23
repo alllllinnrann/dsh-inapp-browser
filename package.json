@@ -1,6 +1,6 @@
 {
   "name": "dsh-inapp-browser",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "A shared interactive browser inside DeepSeek Harness and Better Sidebar: mouse, keyboard, screenshots and agent tools.",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,6 @@
     "cdp"
   ],
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
     "dsh-better-sidebar": ">=0.19.1 <0.20.0"
   },
   "dsh": {

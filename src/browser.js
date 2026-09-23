@@ -15,14 +15,15 @@ const snapshotExpression = `(() => {
   });
   return {url:location.href,title:document.title,width:innerWidth,height:innerHeight,text:(document.body?.innerText||'').slice(0,16000),elements,frames:[...document.querySelectorAll('iframe')].map(e=>({title:e.title,src:e.src})).slice(0,15)};
 })()`;
+const isEdgeWelcome = url => /^edge:\/\/sync-confirmation-dialog\/?/i.test(url || '');
 
 export class BrowserSession extends EventEmitter {
   constructor(id, cdp, homePage = HOME_PAGE) {
     super(); this.id = id; this.cdp = cdp; this.targets = new Map(); this.active = null;
     this.width = 1280; this.height = 800; this.paused = false; this.frame = null; this.revision = 0;
     this.homePage = normalizeUrl(homePage); this.pixelRatio = 1;
-    this.frameEpoch = 0; this.sharpTimer = null; this.sharpPending = false;
-    this.frameDirty = false; this.lastCapture = 0;
+    this.frameEpoch = 0; this.sharpTimer = null; this.settleTimer = null; this.sharpPending = false;
+    this.frameDirty = false; this.lastCapture = 0; this.lastInvalidation = 0;
     this.queue = Promise.resolve(); this.lastUsed = Date.now(); this.streamCount = 0; this.pauseEpoch = 0;
     cdp.on('event', event => this.onEvent(event));
     cdp.on('closed', () => this.emit('state', {error: '浏览器已关闭，请关闭此浏览器会话后重新打开。'}));
@@ -31,8 +32,10 @@ export class BrowserSession extends EventEmitter {
     await this.cdp.send('Browser.getVersion', {}, undefined, 25000);
     await this.cdp.send('Target.setDiscoverTargets', {discover: true});
     const {targetInfos} = await this.cdp.send('Target.getTargets');
-    const page = targetInfos.find(t => t.type === 'page' && t.url === 'about:blank');
-    const id = page?.targetId || (await this.cdp.send('Target.createTarget', {url: 'about:blank'})).targetId;
+    // Edge may turn its initial blank tab into a sync/onboarding page after
+    // discovery. A fresh target keeps that browser-owned tab out of our session.
+    const existing = this.cdp.native && targetInfos.find(t => t.type === 'page' && t.url === 'about:blank');
+    const id = existing?.targetId || (await this.cdp.send('Target.createTarget', {url: 'about:blank'})).targetId;
     await this.select(id);
     // Dedicated plugin profiles keep login data, not restored startup tabs (e.g. Edge first-run pages).
     for (const target of targetInfos) if (target.type === 'page' && target.targetId !== id) await this.cdp.send('Target.closeTarget', {targetId: target.targetId});
@@ -40,6 +43,22 @@ export class BrowserSession extends EventEmitter {
     return this;
   }
   onEvent({method, params, sessionId}) {
+    if ((method === 'Target.targetInfoChanged' || method === 'Target.targetCreated') && params.targetInfo.type === 'page' && isEdgeWelcome(params.targetInfo.url)) {
+      if (params.targetInfo.targetId === this.active) void this.send('Page.navigate', {url: this.homePage}).catch(() => {});
+      else void this.cdp.send('Target.closeTarget', {targetId: params.targetInfo.targetId}).catch(() => {});
+      return;
+    }
+    if (method === 'Target.detachedFromTarget') {
+      for (const [targetId, attachedId] of this.targets) if (attachedId === params.sessionId) {
+        this.targets.delete(targetId);
+        if (targetId === this.active && !this.closed) void this.recoverActiveTarget().catch(error => this.emit('state', {error: error.message}));
+        break;
+      }
+    }
+    if (method === 'Target.targetDestroyed' && params.targetId === this.active && !this.closed) {
+      this.targets.delete(this.active);
+      void this.recoverActiveTarget().catch(error => this.emit('state', {error: error.message}));
+    }
     if (method === 'IAB.viewportChanged' && sessionId === this.targets.get(this.active)) {
       this.width = params.width; this.height = params.height; this.revision++;
       this.emit('state', {width: this.width, height: this.height, revision: this.revision});
@@ -95,7 +114,7 @@ export class BrowserSession extends EventEmitter {
     return {paused: value, message: value ? '浏览器任务已暂停；已发出的单步动作可能仍会完成。' : '已允许新的 AI 浏览器操作。'};
   }
   async select(targetId) {
-    this.frameEpoch++; this.lastStreamImage = null; clearTimeout(this.sharpTimer); this.sharpTimer = null;
+    this.frameEpoch++; this.lastStreamImage = null; clearTimeout(this.sharpTimer); clearTimeout(this.settleTimer); this.sharpTimer = this.settleTimer = null;
     if (!this.cdp.native && this.active && this.targets.has(this.active)) await this.send('Page.stopScreencast').catch(() => {});
     if (!this.targets.has(targetId)) {
       const {sessionId} = await this.cdp.send('Target.attachToTarget', {targetId, flatten: true});
@@ -119,40 +138,74 @@ export class BrowserSession extends EventEmitter {
     await this.send('Page.startScreencast', {format: 'jpeg', quality: 80, maxWidth: this.width, maxHeight: this.height, everyNthFrame: 1});
     this.scheduleSharpFrame();
   }
+  async recoverActiveTarget() {
+    if (this.recovering) return this.recovering;
+    this.recovering = (async () => {
+      const {targetInfos} = await this.cdp.send('Target.getTargets');
+      const page = targetInfos.find(t => t.type === 'page' && t.targetId === this.active && !isEdgeWelcome(t.url))
+        || targetInfos.find(t => t.type === 'page' && !isEdgeWelcome(t.url));
+      const targetId = page?.targetId || (await this.cdp.send('Target.createTarget', {url: 'about:blank'})).targetId;
+      this.targets.delete(targetId);
+      let created = !page;
+      try { await this.select(targetId); }
+      catch (error) {
+        if (!/Session with given id not found|No target with given id found/i.test(error.message)) throw error;
+        const fresh = await this.cdp.send('Target.createTarget', {url: 'about:blank'});
+        await this.select(fresh.targetId);
+        created = true;
+      }
+      if (created && this.homePage !== 'about:blank') await this.send('Page.navigate', {url: this.homePage});
+    })();
+    try { await this.recovering; } finally { this.recovering = null; }
+  }
   scheduleSharpFrame() {
     this.frameDirty = true;
     if (!this.streamCount || this.cdp.native || this.closed) return;
+    this.lastInvalidation = Date.now();
+    clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => { this.settleTimer = null; this.frameDirty = true; this.queueFrameCapture(); }, 230);
+    this.settleTimer.unref?.();
+    this.queueFrameCapture();
+  }
+  queueFrameCapture() {
     if (this.sharpTimer || this.sharpPending || this.displayChanging) return;
     this.sharpTimer = setTimeout(() => {
       this.sharpTimer = null;
       void this.publishSharpFrame();
-    }, Math.max(0, 33 - (Date.now() - this.lastCapture)));
+    }, Math.max(0, 55 - (Date.now() - this.lastCapture)));
     this.sharpTimer.unref?.();
   }
   async publishSharpFrame() {
     if (this.sharpPending || this.displayChanging || !this.streamCount || this.closed) return;
     const epoch = this.frameEpoch, revision = this.revision;
     const sessionId = this.targets.get(this.active), width = this.width, height = this.height;
+    const settled = Date.now() - this.lastInvalidation >= 220;
     this.sharpPending = true; this.frameDirty = false; this.lastCapture = Date.now();
     try {
-      // One capture at a time, latest state only; pixel density never switches.
-      const {data} = await this.cdp.send('Page.captureScreenshot', {format: 'png', captureBeyondViewport: false}, sessionId);
-      if (this.closed || !this.streamCount || epoch !== this.frameEpoch || revision !== this.revision || sessionId !== this.targets.get(this.active)) return;
-      this.frame = {image: data, mimeType: 'image/png', width, height, revision, seq: Date.now()};
+      // High-DPI JPEG is cheaper while moving; a quiet page receives a PNG.
+      const {data} = await this.cdp.send('Page.captureScreenshot', {format: settled ? 'png' : 'jpeg', ...(settled ? {} : {quality: 90}), captureBeyondViewport: false}, sessionId);
+      if (this.closed || !this.streamCount || epoch !== this.frameEpoch || revision !== this.revision || sessionId !== this.targets.get(this.active) || (settled && Date.now() - this.lastInvalidation < 220)) return;
+      this.frame = {image: data, mimeType: settled ? 'image/png' : 'image/jpeg', width, height, revision, seq: Date.now()};
       this.emit('frame', this.frame);
     } catch { /* Keep the live frame if the page is closing or navigating. */ }
-    finally { this.sharpPending = false; if (this.frameDirty) this.scheduleSharpFrame(); }
+    finally { this.sharpPending = false; if (this.frameDirty) this.queueFrameCapture(); }
   }
   async subscribe(frame, state) {
     if (this.cdp.native) throw new Error('此会话使用原生桌面视图，请在配对的桌面启动器中打开。');
     this.on('frame', frame); this.on('state', state); this.streamCount++;
     const off = () => {
       this.off('frame', frame); this.off('state', state); this.streamCount = Math.max(0, this.streamCount - 1);
-      if (!this.streamCount) { this.frameEpoch++; clearTimeout(this.sharpTimer); this.sharpTimer = null; void this.send('Page.stopScreencast').catch(() => {}); }
+      if (!this.streamCount) { this.frameEpoch++; clearTimeout(this.sharpTimer); clearTimeout(this.settleTimer); this.sharpTimer = this.settleTimer = null; void this.send('Page.stopScreencast').catch(() => {}); }
     };
     try {
       state(await this.state());
-      if (this.streamCount === 1) await this.startStream();
+      if (this.streamCount === 1) {
+        try { await this.startStream(); }
+        catch (error) {
+          if (!/Session with given id not found|No target with given id found/i.test(error.message)) throw error;
+          await this.recoverActiveTarget();
+        }
+      }
       else if (this.frame) frame(this.frame);
     } catch (error) { off(); throw error; }
     return off;
@@ -233,7 +286,7 @@ export class BrowserSession extends EventEmitter {
     if (nextWidth === this.width && nextHeight === this.height && nextRatio === this.pixelRatio) return this.state();
     this.displayChanging = true;
     try {
-    this.frameEpoch++; this.lastStreamImage = null; clearTimeout(this.sharpTimer); this.sharpTimer = null;
+    this.frameEpoch++; this.lastStreamImage = null; clearTimeout(this.sharpTimer); clearTimeout(this.settleTimer); this.sharpTimer = this.settleTimer = null;
     this.width = Math.round(number(width, 240, 2560, 'width')); this.height = Math.round(number(height, 160, 1600, 'height'));
     this.pixelRatio = number(pixelRatio, 1, 2, 'pixelRatio');
     await this.send('Emulation.setDeviceMetricsOverride', {width: this.width, height: this.height, deviceScaleFactor: this.pixelRatio, mobile: false});
@@ -272,9 +325,12 @@ export class BrowserSession extends EventEmitter {
         const before = await this.state();
         const target = args.targetId || this.active;
         if (!before.tabs.some(t => t.id === target)) throw new Error('Unknown tab');
-        await this.cdp.send('Target.closeTarget', {targetId: target}); this.targets.delete(target);
-        if (target === this.active) {
-          this.active = null;
+        const wasActive = target === this.active;
+        if (wasActive) this.active = null; // Prevent the detach event from reopening a tab the user closed.
+        try { await this.cdp.send('Target.closeTarget', {targetId: target}); }
+        catch (error) { if (wasActive) this.active = target; throw error; }
+        this.targets.delete(target);
+        if (wasActive) {
           const remaining = before.tabs.find(t => t.id !== target);
           await this.select(remaining?.id || (await this.cdp.send('Target.createTarget', {url: this.homePage})).targetId);
         }
@@ -284,7 +340,7 @@ export class BrowserSession extends EventEmitter {
       default: throw new Error('Unknown browser command');
     }
   }
-  async close() { this.closed = true; this.frameEpoch++; clearTimeout(this.sharpTimer); this.sharpTimer = null; await this.cdp.close(); this.removeAllListeners(); }
+  async close() { this.closed = true; this.frameEpoch++; clearTimeout(this.sharpTimer); clearTimeout(this.settleTimer); this.sharpTimer = this.settleTimer = null; await this.cdp.close(); this.removeAllListeners(); }
 }
 
 export class BrowserManager {

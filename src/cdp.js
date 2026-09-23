@@ -8,7 +8,7 @@ export class PipeCDP extends EventEmitter {
     this.pending = new Map(); this.nextId = 0; this.buffer = Buffer.alloc(0); this.closed = false;
     this.child = spawn(executable, [
       '--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`,
-      '--no-first-run', '--no-default-browser-check', '--disable-background-timer-throttling',
+      '--no-first-run', '--no-default-browser-check', '--disable-sync', '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
       '--window-size=1280,800', 'about:blank',
     ], {stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], windowsHide: true});

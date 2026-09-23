@@ -13,6 +13,10 @@
 !/src/http.js
 !/src/native-cdp.js
 !/src/platform.js
+!/src/client.cjs
 !/lib/
 /lib/*
 !/lib/client.js
+!/scripts/
+/scripts/*
+!/scripts/build.mjs

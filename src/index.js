@@ -1,4 +1,3 @@
-import { defineTool } from '@deepseek-ai/dsh-tools';
 import { BrowserManager } from './browser.js';
 import { createHttpHandler } from './http.js';
 
@@ -9,6 +8,28 @@ const string = description => ({type: 'string', required: true, description});
 const num = description => ({type: 'number', required: true, description});
 const objectSchema = {type: 'object', additionalProperties: true, properties: {}};
 const textRender = (_args, result) => [{type: 'text', text: JSON.stringify(result)}];
+
+// The host accepts the public ToolDefinition shape directly. Keeping this
+// small schema conversion local avoids loading a second copy of dsh-tools and
+// its host-only peer graph from an externally linked plugin directory.
+function defineBrowserTool(options) {
+  const properties = {}, required = [];
+  for (const [key, spec] of Object.entries(options.parameters)) {
+    const {required: isRequired, ...schema} = spec;
+    properties[key] = schema;
+    if (isRequired) required.push(key);
+  }
+  return {...options, parameters: {type: 'object', properties, required, additionalProperties: false},
+    async execute(args, exec) {
+      if (!args || typeof args !== 'object' || Array.isArray(args)) throw new TypeError('工具参数必须是对象。');
+      for (const key of required) if (!(key in args)) throw new TypeError(`缺少工具参数：${key}`);
+      for (const [key, value] of Object.entries(args)) {
+        const schema = properties[key];
+        if (!schema || typeof value !== schema.type || (schema.enum && !schema.enum.includes(value))) throw new TypeError(`工具参数无效：${key}`);
+      }
+      return options.execute(args, exec);
+    }};
+}
 
 export function apply(ctx) {
   const manager = new BrowserManager();
@@ -32,7 +53,7 @@ export function apply(ctx) {
   ctx.effect(() => ctx.webServer.register({kind: 'prefix', path: '/dsh-inapp-browser/api', handler: http.handler}));
   ctx.effect(() => () => { http.dispose(); void manager.dispose(); });
   function register(name, description, parameters, action) {
-    ctx.tools.register(defineTool({
+    ctx.tools.register(defineBrowserTool({
       name: `iab_${name}`, description, parameters,
       output: {schema: objectSchema, render: textRender},
       timeoutMs: 45000, isConcurrencySafe: () => false,
@@ -73,7 +94,7 @@ export function apply(ctx) {
   register('close', 'Close this chat browser process, keeping its profile for the next use. Frees a browser session slot.', {}, 'closeSession');
 
   ctx.inject(['attachments', 'llm'], imageCtx => {
-    imageCtx.tools.register(defineTool({
+    imageCtx.tools.register(defineBrowserTool({
       name: 'iab_screenshot', description: 'Capture the active shared-browser viewport and return the actual image to the model. Requires an image-capable model. Coordinates use the ORIGINAL viewport width/height; if the attachment is downscaled, multiply screenshot coordinates accordingly.',
       parameters: {}, timeoutMs: 45000, isConcurrencySafe: () => false,
       output: {schema: objectSchema, render: (_args, result) => [

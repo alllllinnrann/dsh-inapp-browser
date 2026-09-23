@@ -1,29 +1,8 @@
 # dsh-inapp-browser
 
-## 简单介绍
+为 DeepSeek Harness 提供内置浏览器面板，你和 AI 可以操作同一张网页，支持多标签、点击、中文输入、滚动、拖拽、页面文字读取与截图。默认使用必应，登录资料按聊天保存。
 
-为 DeepSeek Harness 提供内置浏览器面板。你和 AI 可以操作同一张网页，支持点击、中文输入、滚动、拖拽、多标签、页面文字读取和 AI 截图。默认打开必应，登录资料按聊天独立保存。
-
-运行要求：DeepSeek Harness 0.1.5-rc.2、Node.js 22.19+、dsh-better-sidebar 0.19.1–0.19.x，以及本机安装的 Edge、Chrome 或 Chromium。优先使用 Edge；浏览器服务和界面须在同一台电脑。
-
-下载本仓库并解压后安装（路径替换为实际目录）：
-
-```powershell
-dsh plugin --profile web add dsh-better-sidebar@0.19.1
-dsh plugin --profile web add "D:\你的目录\dsh-inapp-browser"
-```
-
-也可以将第二条命令的目录替换为下载的 `.tgz` 安装包路径。已安装兼容版本的 Better Sidebar 时，跳过第一条。使用其他 profile 时，将 `web` 替换为对应名称。
-
-重启 Harness、刷新界面，在右侧栏「+」中选择「浏览器」。可以自己输入网址，或告诉 AI：
-
-> 使用 iab_open 打开 https://www.bing.com，然后用 iab_snapshot 查看页面。请使用 iab_* 工具。
-
-「暂停AI」在当前聊天的 AI 未运行时为灰色，运行时为红色。点击会阻止后续浏览器动作，并请求终止当前 AI 任务；再次发送新指令后重新开放操作。关闭面板不会结束浏览器进程，使用「关闭浏览器会话」或 `iab_close` 释放进程。
-
-画面通过高清 PNG 传输，流畅度取决于页面、面板大小和设备性能。当前仍有卡顿反馈，尚未完成性能优化；不支持音频、原生文件选择器等完整桌面浏览器功能，不保证通过网站验证码。截图工具需要支持图片输入的模型；纯文本模型使用 `iab_snapshot`。
-
-本仓库保留可直接加载的运行文件，不需要构建。许可：MIT，见 [LICENSE](LICENSE)。
+基于本机 Edge / Chrome / Chromium，通过画面传输在 Better Sidebar 中显示网页；不接管日常已经打开的浏览器。适用于本机运行的 Harness 0.1.5-rc.2、Node.js 22.19+、Better Sidebar 0.19.1–0.19.x。截图工具需要支持图片输入的模型。
 
 ## 接口参数
 
